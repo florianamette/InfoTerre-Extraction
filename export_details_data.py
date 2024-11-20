@@ -6,7 +6,7 @@ import csv
 from datetime import datetime
 
 # Configuration
-FILTERED = True
+FILTERED = False
 BASE_URL = "https://infoterre.brgm.fr/rechercher/pagine.htm"
 JSESSIONID = "F7553E5D8CEE73B3681B9AD65B9ADB07"
 HEADERS = {
@@ -178,41 +178,9 @@ def extract_results(html_content):
     return results
 
 
-def fetch_all_results():
+def save_to_csv_incrementally(results, filename="details_results.csv", is_first_batch=False):
     """
-    Parcourt toutes les pages dynamiquement et récupère toutes les données des résultats.
-    """
-    first_page_content = fetch_page_content()
-    max_pages = get_max_pages(first_page_content)
-    print(f"Nombre maximum de pages détecté : {max_pages}")
-
-    all_results = []
-    for page_number in range(1, max_pages + 1):
-        html_content = fetch_page_content(page_number)
-        if html_content:
-            results = extract_results(html_content)
-            all_results.extend(results)
-
-    return all_results
-
-
-def save_to_json(results, filename="details_results.json"):
-    """
-    Sauvegarde les résultats dans un fichier JSON.
-    """
-    def custom_serializer(obj):
-        if isinstance(obj, datetime):
-            return obj.isoformat()
-        raise TypeError(f"Type {type(obj)} non sérialisable.")
-
-    with open(filename, "w", encoding="utf-8") as json_file:
-        json.dump(results, json_file, ensure_ascii=False, indent=4, default=custom_serializer)
-    print(f"Résultats sauvegardés dans {filename}")
-
-
-def save_to_csv(results, filename="details_results.csv"):
-    """
-    Sauvegarde les résultats dans un fichier CSV.
+    Sauvegarde les résultats dans un fichier CSV de manière incrémentale.
     """
     if not results:
         print("Aucun résultat à sauvegarder.")
@@ -223,19 +191,80 @@ def save_to_csv(results, filename="details_results.csv"):
     for result in results:
         all_fieldnames.update(result.keys())
 
-    # Ensure all rows have the same keys
-    standardized_results = []
-    for result in results:
-        standardized_result = {key: result.get(key, None) for key in all_fieldnames}
-        standardized_results.append(standardized_result)
-
-    # Write the standardized results to CSV
-    with open(filename, "w", encoding="utf-8", newline="") as csv_file:
+    # Write the results to CSV
+    with open(filename, "a", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=sorted(all_fieldnames))  # Sort for consistent column order
-        writer.writeheader()
-        writer.writerows(standardized_results)
+        if is_first_batch:
+            writer.writeheader()  # Write header only once for the first batch
+        writer.writerows(results)
 
-    print(f"Résultats sauvegardés dans {filename}")
+    print(f"Résultats sauvegardés dans {filename}.")
+
+def custom_serializer(obj):
+    """
+    Sérialise les objets non pris en charge par défaut, comme datetime.
+    """
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f"Type {type(obj)} non sérialisable.")
+
+def fetch_all_results():
+    """
+    Parcourt toutes les pages dynamiquement et récupère toutes les données des résultats.
+    Les résultats sont enregistrés périodiquement pour éviter de surcharger la mémoire.
+    """
+    first_page_content = fetch_page_content()
+    max_pages = get_max_pages(first_page_content)
+    # max_pages = 2  # For testing purposes
+    print(f"Nombre maximum de pages détecté : {max_pages}")
+
+    json_filename = "details_results.json"
+    csv_filename = "details_results.csv"
+
+    # Initialize the JSON file
+    with open(json_filename, "w", encoding="utf-8") as json_file:
+        json_file.write("[")
+
+    results_buffer = []  # Buffer to hold results temporarily
+    dump_interval = 10  # Save every `dump_interval` pages
+
+    is_first_batch_csv = True  # Track if this is the first batch for the CSV file
+
+    try:
+        for page_number in range(1, max_pages + 1):
+            html_content = fetch_page_content(page_number)
+            if html_content:
+                results = extract_results(html_content)
+                results_buffer.extend(results)
+
+            # Periodically dump results to JSON and CSV files
+            if page_number % dump_interval == 0 or page_number == max_pages:
+                # Save to JSON
+                with open(json_filename, "a", encoding="utf-8") as json_file:
+                    for result in results_buffer:
+                        json.dump(result, json_file, ensure_ascii=False, indent=4, default=custom_serializer)
+                        json_file.write(",\n")  # Add comma between JSON objects
+
+                # Save to CSV
+                save_to_csv_incrementally(results_buffer, csv_filename, is_first_batch_csv)
+                is_first_batch_csv = False  # Header is written, subsequent batches won't write it again
+
+                results_buffer.clear()  # Clear buffer to free memory
+                print(f"Résultats des pages jusqu'à {page_number} sauvegardés.")
+
+        # Remove trailing comma and close the JSON array
+        with open(json_filename, "rb+") as json_file:
+            json_file.seek(0, 2)  # Move to the end of the file
+            json_file.seek(json_file.tell() - 2, 0)  # Remove last comma
+            json_file.write(b"]")
+    except Exception as e:
+        print(f"Erreur : {e}")
+        # Ensure the JSON array is closed if there's an error
+        with open(json_filename, "a", encoding="utf-8") as json_file:
+            json_file.write("]")
+        raise
+
+    print(f"Résultats sauvegardés dans {json_filename} et {csv_filename}.")
 
 
 # Main
@@ -245,7 +274,6 @@ if __name__ == "__main__":
             apply_filter()
 
         all_results = fetch_all_results()
-        save_to_json(all_results)
-        save_to_csv(all_results)
+
     except Exception as e:
         print(f"Erreur : {e}")
