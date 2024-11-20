@@ -8,12 +8,50 @@ from datetime import datetime
 # Configuration
 FILTERED = False
 BASE_URL = "https://infoterre.brgm.fr/rechercher/pagine.htm"
-JSESSIONID = "F7553E5D8CEE73B3681B9AD65B9ADB07"
+JSESSIONID = "D002D4FEFBF302B74FB354D558379680"
 HEADERS = {
-    "Content-Type": "application/x-www-form-urlencoded",
     "User-Agent": "Mozilla/5.0",
     "Cookie": f"JSESSIONID={JSESSIONID}"
 }
+BASE_FILE_NAME = "output/details_results"
+
+def get_unique_filename(base_name, extension):
+    """
+    Generates a unique filename using the base name and a timestamp.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{base_name}_{timestamp}.{extension}"
+
+json_filename = get_unique_filename(BASE_FILE_NAME, "json")
+csv_filename = get_unique_filename(BASE_FILE_NAME, "csv")
+
+
+def get_session_id():
+    session = requests.Session()
+    session.get("https://infoterre.brgm.fr/rechercher/")
+    if 'JSESSIONID' in session.cookies:
+        JSESSIONID = session.cookies['JSESSIONID']
+        print(f"Session ID récupéré: {JSESSIONID}")
+        HEADERS["Cookie"] = f"JSESSIONID={JSESSIONID}"
+        return JSESSIONID
+    else:
+        raise Exception("Impossible de récupérer le JSESSIONID.")
+
+def launch_research():
+    url = "https://infoterre.brgm.fr/rechercher/default.htm;jsessionid=" + JSESSIONID
+    response = requests.get(url, headers=HEADERS)
+    if response.status_code == 200:
+        url = "https://infoterre.brgm.fr/rechercher/switch.htm?scope=6"
+        response = requests.get(url, headers=HEADERS)
+        if response.status_code == 200:
+            url = "https://infoterre.brgm.fr/rechercher/search.htm"
+            response = requests.post(url, headers=HEADERS, data={"inValues": "0", "scopeValue": "6", "what": "", "where": "", "carmatSubstance": "", "carmatProduit": "", "carmatGidic": "", "x": "19", "y": "8"})
+            if response.status_code == 200:
+                print("Recherche lancée avec succès.")
+        else:
+            raise Exception(f"Erreur lors du lancement de la recherche: {response.status_code}")
+    else:
+        raise Exception(f"Erreur lors du lancement de la recherche: {response.status_code}")
 
 def apply_filter():
     url = "https://infoterre.brgm.fr/rechercher/refine.htm"
@@ -23,6 +61,7 @@ def apply_filter():
         print("Filtre appliqué avec succès.")
     else:
         raise Exception(f"Erreur lors de l'application du filtre: {response.status_code}")
+
 
 
 def fetch_page_content(page_number=1):
@@ -178,28 +217,6 @@ def extract_results(html_content):
     return results
 
 
-def save_to_csv_incrementally(results, filename="details_results.csv", is_first_batch=False):
-    """
-    Sauvegarde les résultats dans un fichier CSV de manière incrémentale.
-    """
-    if not results:
-        print("Aucun résultat à sauvegarder.")
-        return
-
-    # Collect all unique keys from the results
-    all_fieldnames = set()
-    for result in results:
-        all_fieldnames.update(result.keys())
-
-    # Write the results to CSV
-    with open(filename, "a", encoding="utf-8", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=sorted(all_fieldnames))  # Sort for consistent column order
-        if is_first_batch:
-            writer.writeheader()  # Write header only once for the first batch
-        writer.writerows(results)
-
-    print(f"Résultats sauvegardés dans {filename}.")
-
 def custom_serializer(obj):
     """
     Sérialise les objets non pris en charge par défaut, comme datetime.
@@ -211,15 +228,11 @@ def custom_serializer(obj):
 def fetch_all_results():
     """
     Parcourt toutes les pages dynamiquement et récupère toutes les données des résultats.
-    Les résultats sont enregistrés périodiquement pour éviter de surcharger la mémoire.
+    Les résultats sont enregistrés dans un fichier JSON, puis convertis en CSV à la fin.
     """
     first_page_content = fetch_page_content()
     max_pages = get_max_pages(first_page_content)
-    # max_pages = 2  # For testing purposes
     print(f"Nombre maximum de pages détecté : {max_pages}")
-
-    json_filename = "details_results.json"
-    csv_filename = "details_results.csv"
 
     # Initialize the JSON file
     with open(json_filename, "w", encoding="utf-8") as json_file:
@@ -228,8 +241,6 @@ def fetch_all_results():
     results_buffer = []  # Buffer to hold results temporarily
     dump_interval = 10  # Save every `dump_interval` pages
 
-    is_first_batch_csv = True  # Track if this is the first batch for the CSV file
-
     try:
         for page_number in range(1, max_pages + 1):
             html_content = fetch_page_content(page_number)
@@ -237,18 +248,12 @@ def fetch_all_results():
                 results = extract_results(html_content)
                 results_buffer.extend(results)
 
-            # Periodically dump results to JSON and CSV files
+            # Periodically dump results to JSON
             if page_number % dump_interval == 0 or page_number == max_pages:
-                # Save to JSON
                 with open(json_filename, "a", encoding="utf-8") as json_file:
                     for result in results_buffer:
                         json.dump(result, json_file, ensure_ascii=False, indent=4, default=custom_serializer)
                         json_file.write(",\n")  # Add comma between JSON objects
-
-                # Save to CSV
-                save_to_csv_incrementally(results_buffer, csv_filename, is_first_batch_csv)
-                is_first_batch_csv = False  # Header is written, subsequent batches won't write it again
-
                 results_buffer.clear()  # Clear buffer to free memory
                 print(f"Résultats des pages jusqu'à {page_number} sauvegardés.")
 
@@ -257,6 +262,7 @@ def fetch_all_results():
             json_file.seek(0, 2)  # Move to the end of the file
             json_file.seek(json_file.tell() - 2, 0)  # Remove last comma
             json_file.write(b"]")
+
     except Exception as e:
         print(f"Erreur : {e}")
         # Ensure the JSON array is closed if there's an error
@@ -264,16 +270,50 @@ def fetch_all_results():
             json_file.write("]")
         raise
 
-    print(f"Résultats sauvegardés dans {json_filename} et {csv_filename}.")
+    print(f"Résultats sauvegardés dans {json_filename}.")
+    return json_filename
+
+
+def convert_json_to_csv():
+    """
+    Convertit les données d'un fichier JSON en fichier CSV.
+    """
+    try:
+        with open(json_filename, "r", encoding="utf-8") as json_file:
+            data = json.load(json_file)
+
+        if not data:
+            print("Aucune donnée à convertir en CSV.")
+            return
+
+        # Collect all unique keys
+        all_fieldnames = set()
+        for result in data:
+            all_fieldnames.update(result.keys())
+
+        # Write to CSV
+        with open(csv_filename, "w", encoding="utf-8", newline="") as csv_file:
+            writer = csv.DictWriter(csv_file, fieldnames=sorted(all_fieldnames))  # Sort keys for consistent order
+            writer.writeheader()
+            writer.writerows(data)
+
+        print(f"Résultats convertis en CSV et sauvegardés dans {csv_filename}.")
+    except Exception as e:
+        print(f"Erreur lors de la conversion JSON -> CSV : {e}")
 
 
 # Main
 if __name__ == "__main__":
     try:
+        get_session_id()
+        launch_research()
+
         if FILTERED:
+            print("Filtrage des résultats...")
             apply_filter()
 
-        all_results = fetch_all_results()
+        json_file = fetch_all_results()
+        convert_json_to_csv()
 
     except Exception as e:
         print(f"Erreur : {e}")
