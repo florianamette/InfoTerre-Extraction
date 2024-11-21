@@ -14,6 +14,7 @@ HEADERS = {
     "Cookie": f"JSESSIONID={JSESSIONID}"
 }
 BASE_FILE_NAME = "output/details_results"
+START_PAGE = 1921
 
 def get_unique_filename(base_name, extension):
     """
@@ -242,7 +243,7 @@ def fetch_all_results():
     dump_interval = 10  # Save every `dump_interval` pages
 
     try:
-        for page_number in range(1, max_pages + 1):
+        for page_number in range(START_PAGE, max_pages + 1):
             html_content = fetch_page_content(page_number)
             if html_content:
                 results = extract_results(html_content)
