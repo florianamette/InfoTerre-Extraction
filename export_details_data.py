@@ -6,7 +6,7 @@ import csv
 from datetime import datetime
 
 # Configuration
-FILTERED = False
+FILTERED = True
 BASE_URL = "https://infoterre.brgm.fr/rechercher/pagine.htm"
 JSESSIONID = "D002D4FEFBF302B74FB354D558379680"
 HEADERS = {
@@ -14,7 +14,7 @@ HEADERS = {
     "Cookie": f"JSESSIONID={JSESSIONID}"
 }
 BASE_FILE_NAME = "output/details_results"
-START_PAGE = 1921
+START_PAGE = 0
 
 def get_unique_filename(base_name, extension):
     """
@@ -123,6 +123,7 @@ def extract_most_recent_ap(html_content):
     Extracts the most recent AP (Arrêté préfectoral) information from the given HTML content.
     """
     soup = BeautifulSoup(html_content, "html.parser")
+
     historique_section = soup.find("div", id="historique")
 
     if not historique_section:
@@ -186,6 +187,33 @@ def extract_additional_data(soup, row_id):
     return additional_data
 
 
+def extract_additional_parameters(details_html):
+    soup = BeautifulSoup(details_html, "html.parser")
+
+    # Locate the `identityInfo` div
+    identity_info = soup.find("div", class_="identityInfo")
+    if not identity_info:
+        print("No identityInfo div found.")
+        return "", ""
+
+    name = ""
+    exploited_by = ""
+
+    try:
+        # Find all <p> tags within identity_info and iterate over them
+        for p_tag in identity_info.find_all("p"):
+            # Clean the text from nested tags and spaces
+            text = p_tag.get_text(strip=True)
+            if "Nom" in text:
+                name = text.split(":")[1].strip()  # Extract text after ':'
+            elif "Exploitée par" in text:
+                exploited_by = text.split(":")[1].strip()  # Extract text after ':'
+    except Exception as e:
+        print("Error extracting parameters:", e)
+
+    return name, exploited_by
+
+
 def extract_results(html_content):
     """
     Analyse le contenu HTML pour extraire les données principales et additionnelles.
@@ -210,8 +238,13 @@ def extract_results(html_content):
             details_html = fetch_additional_details(row_id.strip('carmat'))
             if details_html:
                 recent_ap = extract_most_recent_ap(details_html)
+                name, exploited_by = extract_additional_parameters(details_html)
                 if recent_ap:
                     result.update(recent_ap)
+                if name:
+                    result["Nom"] = name
+                if exploited_by:
+                    result["Exploitée par"] = exploited_by
 
             results.append(result)
 
