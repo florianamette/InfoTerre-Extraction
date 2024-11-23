@@ -6,7 +6,7 @@ import csv
 from datetime import datetime
 
 # Configuration
-FILTERED = True
+FILTERED = False
 BASE_URL = "https://infoterre.brgm.fr/rechercher/pagine.htm"
 JSESSIONID = "D002D4FEFBF302B74FB354D558379680"
 HEADERS = {
@@ -14,7 +14,7 @@ HEADERS = {
     "Cookie": f"JSESSIONID={JSESSIONID}"
 }
 BASE_FILE_NAME = "output/details_results"
-START_PAGE = 0
+START_PAGE = 2271
 
 def get_unique_filename(base_name, extension):
     """
